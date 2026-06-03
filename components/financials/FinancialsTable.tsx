@@ -48,8 +48,8 @@ export function FinancialsTable({ data }: { data: FinancialYear[] }) {
         <thead>
           <tr className="border-b border-[var(--border)]">
             <th className="text-left text-xs text-gray-500 py-2 pr-4 font-medium w-40">指标</th>
-            {years.map(y => (
-              <th key={y} className="text-right text-xs text-gray-400 py-2 px-2 font-semibold">{y}</th>
+            {years.map((y, i) => (
+              <th key={`${y ?? "yr"}-${i}`} className="text-right text-xs text-gray-400 py-2 px-2 font-semibold">{y}</th>
             ))}
           </tr>
         </thead>
@@ -60,8 +60,8 @@ export function FinancialsTable({ data }: { data: FinancialYear[] }) {
               className={`border-b border-[var(--border)]/50 hover:bg-gray-800/30 ${i % 2 === 0 ? "" : "bg-gray-900/20"}`}
             >
               <td className="py-2 pr-4 text-xs text-gray-400 whitespace-nowrap">{row.label}</td>
-              {data.map(d => (
-                <td key={d.year} className="text-right py-2 px-2 tabular-nums text-xs">
+              {data.map((d, di) => (
+                <td key={`${row.key}-${d.year ?? di}`} className="text-right py-2 px-2 tabular-nums text-xs">
                   {row.fmt === "B" ? fmtB(d[row.key] as number | null) :
                     row.fmt === "pct" ? fmtPct(d[row.key] as number | null) :
                       fmtNum(d[row.key] as number | null)}
