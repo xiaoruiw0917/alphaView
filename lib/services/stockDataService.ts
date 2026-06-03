@@ -153,9 +153,9 @@ export async function fetchHistory(ticker: string, period = "1y"): Promise<OHLCV
 export async function fetchFinancials(ticker: string): Promise<{ annual: FinancialYear[] }> {
   const sym = ticker.toUpperCase()
 
-  type Inc = { calendarYear: string; revenue: number; grossProfit: number; operatingIncome: number; netIncome: number; eps: number }
-  type Bal = { calendarYear: string; totalAssets: number; totalLiabilities: number; totalStockholdersEquity: number; totalCurrentAssets: number; totalCurrentLiabilities: number; totalDebt: number }
-  type Cf  = { calendarYear: string; freeCashFlow: number; operatingCashFlow: number; capitalExpenditure: number }
+  type Inc = { fiscalYear: string; revenue: number; grossProfit: number; operatingIncome: number; netIncome: number; eps: number }
+  type Bal = { fiscalYear: string; totalAssets: number; totalLiabilities: number; totalStockholdersEquity: number; totalCurrentAssets: number; totalCurrentLiabilities: number; totalDebt: number }
+  type Cf  = { fiscalYear: string; freeCashFlow: number; operatingCashFlow: number; capitalExpenditure: number }
 
   const [inc, bal, cf] = await Promise.all([
     fmp<Inc[]>("/income-statement", { symbol: sym, limit: "5" }),
@@ -166,15 +166,15 @@ export async function fetchFinancials(ticker: string): Promise<{ annual: Financi
   const byYear: Record<string, FinancialYear> = {}
 
   for (const r of inc ?? []) {
-    const y = r.calendarYear; const rev = n(r.revenue) ?? 0; const ni = n(r.netIncome) ?? 0; const gp = n(r.grossProfit) ?? 0
+    const y = r.fiscalYear; const rev = n(r.revenue) ?? 0; const ni = n(r.netIncome) ?? 0; const gp = n(r.grossProfit) ?? 0
     byYear[y] = { ...(byYear[y] ?? {}), year: y, revenue: rev, gross_profit: gp, operating_income: n(r.operatingIncome), net_income: ni, eps: n(r.eps), gross_margin: rev ? +(gp/rev).toFixed(4) : null, net_margin: rev ? +(ni/rev).toFixed(4) : null } as FinancialYear
   }
   for (const r of bal ?? []) {
-    const y = r.calendarYear; const a = n(r.totalAssets) ?? 0; const e = n(r.totalStockholdersEquity) ?? 0; const ni = (byYear[y]?.net_income ?? 0) as number
+    const y = r.fiscalYear; const a = n(r.totalAssets) ?? 0; const e = n(r.totalStockholdersEquity) ?? 0; const ni = (byYear[y]?.net_income ?? 0) as number
     byYear[y] = { ...(byYear[y] ?? {}), year: y, total_assets: a, total_liabilities: n(r.totalLiabilities), shareholders_equity: e, current_assets: n(r.totalCurrentAssets), current_liabilities: n(r.totalCurrentLiabilities), total_debt: n(r.totalDebt), roe: e>0?+(ni/e).toFixed(4):null, roa: a>0?+(ni/a).toFixed(4):null, debt_ratio: a?+((n(r.totalLiabilities)??0)/a).toFixed(4):null, current_ratio: n(r.totalCurrentLiabilities)?+((n(r.totalCurrentAssets)??0)/(n(r.totalCurrentLiabilities)??1)).toFixed(2):null } as FinancialYear
   }
   for (const r of cf ?? []) {
-    const y = r.calendarYear
+    const y = r.fiscalYear
     byYear[y] = { ...(byYear[y] ?? {}), year: y, free_cash_flow: n(r.freeCashFlow), operating_cash_flow: n(r.operatingCashFlow), capex: n(r.capitalExpenditure) } as FinancialYear
   }
 
