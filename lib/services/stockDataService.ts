@@ -122,34 +122,44 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
   }
 }
 
-// ─── Price History ─────────────────────────────────────────────────────────
-const PERIOD_DAYS: Record<string, number> = {
-  "1d": 2, "5d": 5, "1mo": 30, "3mo": 90,
-  "6mo": 180, "1y": 365, "2y": 730, "5y": 1825,
+// ─── Price History (Yahoo Finance) ────────────────────────────────────────
+const YF_RANGE: Record<string, string> = {
+  "1d": "1d", "5d": "5d", "1mo": "1mo", "3mo": "3mo",
+  "6mo": "6mo", "1y": "1y", "2y": "2y", "5y": "5y",
+}
+const YF_INTERVAL: Record<string, string> = {
+  "1d": "5m", "5d": "15m", "1mo": "1d", "3mo": "1d",
+  "6mo": "1d", "1y": "1d", "2y": "1wk", "5y": "1wk",
 }
 
 export async function fetchHistory(ticker: string, period = "1y"): Promise<OHLCVBar[]> {
-  const sym  = ticker.toUpperCase()
-  const days = PERIOD_DAYS[period] ?? 365
-  const to   = new Date()
-  const from = new Date(to.getTime() - days * 86_400_000)
-  const fmt  = (d: Date) => d.toISOString().slice(0, 10)
+  const sym      = ticker.toUpperCase()
+  const range    = YF_RANGE[period]    ?? "1y"
+  const interval = YF_INTERVAL[period] ?? "1d"
 
-  type Bar = { date: string; open: number; high: number; low: number; close: number; volume: number }
-  const data = await fmp<Bar[]>("/historical-price-full", {
-    symbol: sym, from: fmt(from), to: fmt(to),
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?range=${range}&interval=${interval}&includePrePost=false`
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0" },
+    next: { revalidate: 300 },
   })
+  if (!res.ok) throw new Error(`Yahoo Finance chart → HTTP ${res.status}`)
 
-  return (Array.isArray(data) ? data : [])
-    .map(b => ({
-      time:   b.date,
-      open:   +Number(b.open).toFixed(2),
-      high:   +Number(b.high).toFixed(2),
-      low:    +Number(b.low).toFixed(2),
-      close:  +Number(b.close).toFixed(2),
-      volume: b.volume,
-    }))
-    .reverse()
+  const json = await res.json()
+  const result = json?.chart?.result?.[0]
+  if (!result) return []
+
+  const ts    = result.timestamp as number[]
+  const quote = result.indicators?.quote?.[0]
+  if (!ts || !quote) return []
+
+  return ts.map((t, i) => ({
+    time:   new Date(t * 1000).toISOString().slice(0, 10),
+    open:   +Number(quote.open?.[i]  ?? 0).toFixed(2),
+    high:   +Number(quote.high?.[i]  ?? 0).toFixed(2),
+    low:    +Number(quote.low?.[i]   ?? 0).toFixed(2),
+    close:  +Number(quote.close?.[i] ?? 0).toFixed(2),
+    volume: quote.volume?.[i] ?? 0,
+  })).filter(b => b.close > 0)
 }
 
 // ─── Financials ────────────────────────────────────────────────────────────
