@@ -33,32 +33,35 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
     averageVolume: number; yearHigh: number; yearLow: number
     exchange: string; range: string
   }
-  type Metrics = {
-    peRatio: number; forwardPE: number; pbRatio: number; priceToSalesRatio: number
-    pegRatio: number; evToEbitda: number; roe: number; roa: number
-    grossProfitMargin: number; operatingProfitMargin: number; netProfitMargin: number
-    debtToEquity: number; currentRatio: number; revenueGrowth: number
-    earningsGrowth: number; freeCashFlowPerShare: number; dividendYield: number
-    eps: number; revenuePerShare: number
+  type RatiosTTM = {
+    priceToEarningsRatioTTM: number; priceToEarningsGrowthRatioTTM: number
+    forwardPriceToEarningsGrowthRatioTTM: number; priceToBookRatioTTM: number
+    priceToSalesRatioTTM: number; priceToFreeCashFlowRatioTTM: number
+    grossProfitMarginTTM: number; operatingProfitMarginTTM: number; netProfitMarginTTM: number
+    currentRatioTTM: number; debtToEquityTTM: number
+    dividendYieldTTM: number; epsTTM: number
+    revenueGrowthTTM: number; earningsGrowthTTM: number
   }
-  type Company = {
-    description: string; sector: string; industry: string
-    fullTimeEmployees: string; website: string
+  type KeyMetrics = {
+    returnOnEquity: number; returnOnAssets: number; evToEBITDA: number; currentRatio: number
   }
-  type Analyst = { targetHigh: number; targetLow: number; targetConsensus: number; targetMedian: number }
+  type Company = { description: string; sector: string; industry: string; fullTimeEmployees: string; website: string }
+  type Analyst = { targetConsensus: number; targetMedian: number }
   type Rec = { analystRatingsStrongBuy: number; analystRatingsBuy: number; analystRatingsHold: number; analystRatingsSell: number; analystRatingsStrongSell: number }[]
 
-  const [profiles, keyMetrics, company, analystRaw, consensus] = await Promise.all([
+  const [profiles, ratiosTTM, keyMetrics, company, analystRaw, consensus] = await Promise.all([
     fmp<Profile[]>("/profile", { symbol: sym }),
-    fmp<Metrics[]>("/key-metrics", { symbol: sym, limit: "1" }),
+    fmp<RatiosTTM[]>("/ratios-ttm", { symbol: sym }).catch(() => []),
+    fmp<KeyMetrics[]>("/key-metrics", { symbol: sym, limit: "1" }).catch(() => []),
     fmp<Company[]>("/profile", { symbol: sym }).catch(() => []),
     fmp<Rec>("/analyst-stock-recommendations", { symbol: sym, limit: "1" }).catch(() => []),
     fmp<Analyst[]>("/price-target-consensus", { symbol: sym }).catch(() => []),
   ])
 
-  const p  = profiles?.[0]  ?? {} as Partial<Profile>
-  const m  = keyMetrics?.[0] ?? {} as Partial<Metrics>
-  const co = company?.[0]   ?? {} as Partial<Company>
+  const p  = profiles?.[0]   ?? {} as Partial<Profile>
+  const r  = ratiosTTM?.[0]  ?? {} as Partial<RatiosTTM>
+  const km = keyMetrics?.[0] ?? {} as Partial<KeyMetrics>
+  const co = company?.[0]    ?? {} as Partial<Company>
   const tgt = consensus?.[0] ?? {} as Partial<Analyst>
 
   const price     = Number(p.price ?? 0)
@@ -91,30 +94,30 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
     prev_close:       price - Number(p.change ?? 0),
     change_pct:       changePct,
     market_cap:       n(p.marketCap),
-    pe_ratio:         n(m.peRatio),
-    forward_pe:       n(m.forwardPE),
-    pb_ratio:         n(m.pbRatio),
-    ps_ratio:         n(m.priceToSalesRatio),
-    peg_ratio:        n(m.pegRatio),
-    ev_ebitda:        n(m.evToEbitda),
-    roe:              n(m.roe),
-    roa:              n(m.roa),
-    gross_margin:     n(m.grossProfitMargin),
-    operating_margin: n(m.operatingProfitMargin),
-    net_margin:       n(m.netProfitMargin),
-    debt_to_equity:   n(m.debtToEquity),
-    current_ratio:    n(m.currentRatio),
-    revenue_growth:   n(m.revenueGrowth),
-    earnings_growth:  n(m.earningsGrowth),
+    pe_ratio:         n(r.priceToEarningsRatioTTM),
+    forward_pe:       n(r.forwardPriceToEarningsGrowthRatioTTM),
+    pb_ratio:         n(r.priceToBookRatioTTM),
+    ps_ratio:         n(r.priceToSalesRatioTTM),
+    peg_ratio:        n(r.priceToEarningsGrowthRatioTTM),
+    ev_ebitda:        n(km.evToEBITDA),
+    roe:              n(km.returnOnEquity),
+    roa:              n(km.returnOnAssets),
+    gross_margin:     n(r.grossProfitMarginTTM),
+    operating_margin: n(r.operatingProfitMarginTTM),
+    net_margin:       n(r.netProfitMarginTTM),
+    debt_to_equity:   n(r.debtToEquityTTM),
+    current_ratio:    n(r.currentRatioTTM) ?? n(km.currentRatio),
+    revenue_growth:   n(r.revenueGrowthTTM),
+    earnings_growth:  n(r.earningsGrowthTTM),
     free_cashflow:    null,
-    dividend_yield:   n(m.dividendYield),
+    dividend_yield:   n(r.dividendYieldTTM),
     beta:             n(p.beta),
     "52w_high":       n(p.yearHigh),
     "52w_low":        n(p.yearLow),
     avg_volume:       n(p.averageVolume),
     analyst_rating:   analystRating,
     target_price:     n(tgt.targetConsensus) ?? n(tgt.targetMedian),
-    eps:              n(m.eps),
+    eps:              n(r.epsTTM),
     forward_eps:      null,
   }
 }
