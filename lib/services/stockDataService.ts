@@ -48,21 +48,29 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
   type Company = { description: string; sector: string; industry: string; fullTimeEmployees: string; website: string }
   type Analyst = { targetConsensus: number; targetMedian: number }
   type Rec = { analystRatingsStrongBuy: number; analystRatingsBuy: number; analystRatingsHold: number; analystRatingsSell: number; analystRatingsStrongSell: number }[]
+  type IncStmt = { eps: number; revenue: number; netIncome: number; date?: string }
+  type Growth  = { growthRevenue: number; growthNetIncome: number; growthEps: number }
+  type CashFlow = { freeCashFlow: number; operatingCashFlow: number }
 
-  const [profiles, ratiosTTM, keyMetrics, company, analystRaw, consensus] = await Promise.all([
+  const [profiles, ratiosTTM, keyMetrics, analystRaw, consensus, incStmt, growth, cashflow] = await Promise.all([
     fmp<Profile[]>("/profile", { symbol: sym }),
     fmp<RatiosTTM[]>("/ratios-ttm", { symbol: sym }).catch(() => []),
     fmp<KeyMetrics[]>("/key-metrics", { symbol: sym, limit: "1" }).catch(() => []),
-    fmp<Company[]>("/profile", { symbol: sym }).catch(() => []),
     fmp<Rec>("/analyst-stock-recommendations", { symbol: sym, limit: "1" }).catch(() => []),
     fmp<Analyst[]>("/price-target-consensus", { symbol: sym }).catch(() => []),
+    fmp<IncStmt[]>("/income-statement", { symbol: sym, limit: "1" }).catch(() => []),
+    fmp<Growth[]>("/income-statement-growth", { symbol: sym, limit: "1" }).catch(() => []),
+    fmp<CashFlow[]>("/cash-flow-statement", { symbol: sym, limit: "1" }).catch(() => []),
   ])
 
-  const p  = profiles?.[0]   ?? {} as Partial<Profile>
-  const r  = ratiosTTM?.[0]  ?? {} as Partial<RatiosTTM>
-  const km = keyMetrics?.[0] ?? {} as Partial<KeyMetrics>
-  const co = company?.[0]    ?? {} as Partial<Company>
-  const tgt = consensus?.[0] ?? {} as Partial<Analyst>
+  const p   = profiles?.[0]   ?? {} as Partial<Profile>
+  const r   = ratiosTTM?.[0]  ?? {} as Partial<RatiosTTM>
+  const km  = keyMetrics?.[0] ?? {} as Partial<KeyMetrics>
+  const co  = profiles?.[0]   ?? {} as Partial<Company>   // profile has description too
+  const tgt = consensus?.[0]  ?? {} as Partial<Analyst>
+  const inc = incStmt?.[0]    ?? {} as Partial<IncStmt>
+  const grw = growth?.[0]     ?? {} as Partial<Growth>
+  const cf  = cashflow?.[0]   ?? {} as Partial<CashFlow>
 
   const price     = Number(p.price ?? 0)
   const changePct = Number(p.changePercentage ?? 0)
@@ -85,17 +93,17 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
     ticker:           sym,
     company_name:     (p as { name?: string }).name ?? sym,
     exchange:         p.exchange ?? "",
-    sector:           co.sector ?? "",
-    industry:         co.industry ?? "",
-    website:          co.website ?? "",
-    description:      (co.description ?? "").slice(0, 600),
-    employees:        co.fullTimeEmployees ? Number(co.fullTimeEmployees) : null,
+    sector:           (p as {sector?:string}).sector ?? "",
+    industry:         (p as {industry?:string}).industry ?? "",
+    website:          (p as {weburl?:string;website?:string}).weburl ?? (p as {website?:string}).website ?? "",
+    description:      ((p as {description?:string}).description ?? "").slice(0, 600),
+    employees:        (p as {fullTimeEmployees?:string}).fullTimeEmployees ? Number((p as {fullTimeEmployees?:string}).fullTimeEmployees) : null,
     price,
     prev_close:       price - Number(p.change ?? 0),
     change_pct:       changePct,
     market_cap:       n(p.marketCap),
     pe_ratio:         n(r.priceToEarningsRatioTTM),
-    forward_pe:       n(r.forwardPriceToEarningsGrowthRatioTTM),
+    forward_pe:       null,   // FMP stable 暂无 forward PE 字段
     pb_ratio:         n(r.priceToBookRatioTTM),
     ps_ratio:         n(r.priceToSalesRatioTTM),
     peg_ratio:        n(r.priceToEarningsGrowthRatioTTM),
@@ -107,9 +115,9 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
     net_margin:       n(r.netProfitMarginTTM),
     debt_to_equity:   n(r.debtToEquityTTM),
     current_ratio:    n(r.currentRatioTTM) ?? n(km.currentRatio),
-    revenue_growth:   n(r.revenueGrowthTTM),
-    earnings_growth:  n(r.earningsGrowthTTM),
-    free_cashflow:    null,
+    revenue_growth:   n(grw.growthRevenue),
+    earnings_growth:  n(grw.growthNetIncome) ?? n(grw.growthEps),
+    free_cashflow:    n(cf.freeCashFlow),
     dividend_yield:   n(r.dividendYieldTTM),
     beta:             n(p.beta),
     "52w_high":       n(p.yearHigh),
@@ -117,7 +125,7 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
     avg_volume:       n(p.averageVolume),
     analyst_rating:   analystRating,
     target_price:     n(tgt.targetConsensus) ?? n(tgt.targetMedian),
-    eps:              n(r.epsTTM),
+    eps:              n(inc.eps),
     forward_eps:      null,
   }
 }
@@ -166,9 +174,9 @@ export async function fetchHistory(ticker: string, period = "1y"): Promise<OHLCV
 export async function fetchFinancials(ticker: string): Promise<{ annual: FinancialYear[] }> {
   const sym = ticker.toUpperCase()
 
-  type Inc = { fiscalYear: string; revenue: number; grossProfit: number; operatingIncome: number; netIncome: number; eps: number }
-  type Bal = { fiscalYear: string; totalAssets: number; totalLiabilities: number; totalStockholdersEquity: number; totalCurrentAssets: number; totalCurrentLiabilities: number; totalDebt: number }
-  type Cf  = { fiscalYear: string; freeCashFlow: number; operatingCashFlow: number; capitalExpenditure: number }
+  type Inc = { fiscalYear: string; date?: string; revenue: number; grossProfit: number; operatingIncome: number; netIncome: number; eps: number }
+  type Bal = { fiscalYear: string; date?: string; totalAssets: number; totalLiabilities: number; totalStockholdersEquity: number; totalCurrentAssets: number; totalCurrentLiabilities: number; totalDebt: number }
+  type Cf  = { fiscalYear: string; date?: string; freeCashFlow: number; operatingCashFlow: number; capitalExpenditure: number }
 
   const [inc, bal, cf] = await Promise.all([
     fmp<Inc[]>("/income-statement", { symbol: sym, limit: "5" }),
@@ -200,15 +208,45 @@ export async function fetchFinancials(ticker: string): Promise<{ annual: Financi
 export async function fetchPeers(ticker: string): Promise<PeerStock[]> {
   const sym = ticker.toUpperCase()
   type PeerRow = { symbol: string; companyName: string; price: number; mktCap: number }
+  type RTtm = { priceToEarningsRatioTTM: number; priceToBookRatioTTM: number; priceToSalesRatioTTM: number; netProfitMarginTTM: number; priceToEarningsGrowthRatioTTM: number }
+  type KM   = { returnOnEquity: number; evToEBITDA: number }
+  type Grw  = { growthRevenue: number }
+
   const list = await fmp<PeerRow[]>("/stock-peers", { symbol: sym }).catch(() => [])
   if (!list?.length) return []
+  const peers = list.slice(0, 8)
 
-  return list.slice(0, 8).map(p => ({
-    ticker: p.symbol, company_name: p.companyName,
-    pe_ratio: null, forward_pe: null, pb_ratio: null, ps_ratio: null,
-    peg_ratio: null, ev_ebitda: null, net_margin: null, roe: null,
-    revenue_growth: null, market_cap: n(p.mktCap),
-  }))
+  const results = await Promise.allSettled(
+    peers.map(async (peer) => {
+      const s = peer.symbol
+      const [rt, km, grw] = await Promise.all([
+        fmp<RTtm[]>("/ratios-ttm", { symbol: s }).catch(() => []),
+        fmp<KM[]>("/key-metrics", { symbol: s, limit: "1" }).catch(() => []),
+        fmp<Grw[]>("/income-statement-growth", { symbol: s, limit: "1" }).catch(() => []),
+      ])
+      const r  = rt?.[0]  ?? {} as Partial<RTtm>
+      const k  = km?.[0]  ?? {} as Partial<KM>
+      const g  = grw?.[0] ?? {} as Partial<Grw>
+      return {
+        ticker:         s,
+        company_name:   peer.companyName,
+        pe_ratio:       n(r.priceToEarningsRatioTTM),
+        forward_pe:     null,
+        pb_ratio:       n(r.priceToBookRatioTTM),
+        ps_ratio:       n(r.priceToSalesRatioTTM),
+        peg_ratio:      n(r.priceToEarningsGrowthRatioTTM),
+        ev_ebitda:      n(k.evToEBITDA),
+        net_margin:     n(r.netProfitMarginTTM),
+        roe:            n(k.returnOnEquity),
+        revenue_growth: n(g.growthRevenue),
+        market_cap:     n(peer.mktCap),
+      } as PeerStock
+    })
+  )
+
+  return results
+    .filter(r => r.status === "fulfilled")
+    .map(r => (r as PromiseFulfilledResult<PeerStock>).value)
 }
 
 // ─── Fallback quote ────────────────────────────────────────────────────────
