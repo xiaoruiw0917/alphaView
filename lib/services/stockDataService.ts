@@ -1,14 +1,11 @@
 /**
- * Stock data service — pure REST API, no Python bridge.
- * Primary:  Financial Modeling Prep (FMP)
- * Fallback: Finnhub (quote only)
+ * Stock data service — FMP stable API (new endpoints, post-Aug 2025)
+ * Docs: https://site.financialmodelingprep.com/developer/docs
  */
 import type { StockOverview, OHLCVBar, FinancialYear, PeerStock } from "@/lib/types/stock"
 
-const FMP   = process.env.FMP_API_KEY   || ""
-const FINN  = process.env.FINNHUB_API_KEY || ""
-const BASE  = "https://financialmodelingprep.com/api/v3"
-const BASE4 = "https://financialmodelingprep.com/api/v4"
+const FMP  = process.env.FMP_API_KEY || ""
+const BASE = "https://financialmodelingprep.com/stable"
 
 async function fmp<T>(path: string, params: Record<string, string> = {}): Promise<T> {
   if (!FMP) throw new Error("FMP_API_KEY not set")
@@ -16,81 +13,115 @@ async function fmp<T>(path: string, params: Record<string, string> = {}): Promis
   const res = await fetch(`${BASE}${path}?${qs}`, { next: { revalidate: 300 } })
   if (!res.ok) throw new Error(`FMP ${path} → HTTP ${res.status}`)
   const data = await res.json()
-  // FMP returns {"Error Message": "..."} on bad key
-  if (data && typeof data === "object" && !Array.isArray(data) && data["Error Message"])
-    throw new Error(data["Error Message"])
+  if (data?.["Error Message"]) throw new Error(data["Error Message"])
   return data as T
 }
 
-async function fmp4<T>(path: string, params: Record<string, string> = {}): Promise<T> {
-  if (!FMP) throw new Error("FMP_API_KEY not set")
-  const qs = new URLSearchParams({ ...params, apikey: FMP }).toString()
-  const res = await fetch(`${BASE4}${path}?${qs}`, { next: { revalidate: 300 } })
-  if (!res.ok) throw new Error(`FMP4 ${path} → HTTP ${res.status}`)
-  return res.json() as Promise<T>
+function n(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  const num = Number(v)
+  return isFinite(num) && num !== 0 ? num : null
 }
 
 // ─── Overview ──────────────────────────────────────────────────────────────
 export async function fetchOverview(ticker: string): Promise<StockOverview> {
   const sym = ticker.toUpperCase()
 
-  // FMP profile + real-time quote in parallel
-  const [profiles, quotes] = await Promise.all([
-    fmp<Record<string, unknown>[]>(`/profile/${sym}`),
-    fmp<Record<string, unknown>[]>(`/quote/${sym}`),
+  type Profile = {
+    symbol: string; name: string; price: number; marketCap: number
+    beta: number; change: number; changePercentage: number; volume: number
+    averageVolume: number; yearHigh: number; yearLow: number
+    exchange: string; range: string
+  }
+  type Metrics = {
+    peRatio: number; forwardPE: number; pbRatio: number; priceToSalesRatio: number
+    pegRatio: number; evToEbitda: number; roe: number; roa: number
+    grossProfitMargin: number; operatingProfitMargin: number; netProfitMargin: number
+    debtToEquity: number; currentRatio: number; revenueGrowth: number
+    earningsGrowth: number; freeCashFlowPerShare: number; dividendYield: number
+    eps: number; revenuePerShare: number
+  }
+  type Company = {
+    description: string; sector: string; industry: string
+    fullTimeEmployees: string; website: string
+  }
+  type Analyst = { targetHigh: number; targetLow: number; targetConsensus: number; targetMedian: number }
+  type Rec = { analystRatingsStrongBuy: number; analystRatingsBuy: number; analystRatingsHold: number; analystRatingsSell: number; analystRatingsStrongSell: number }[]
+
+  const [profiles, keyMetrics, company, analystRaw, consensus] = await Promise.all([
+    fmp<Profile[]>("/profile", { symbol: sym }),
+    fmp<Metrics[]>("/key-metrics", { symbol: sym, limit: "1" }),
+    fmp<Company[]>("/profile", { symbol: sym }).catch(() => []),
+    fmp<Rec>("/analyst-stock-recommendations", { symbol: sym, limit: "1" }).catch(() => []),
+    fmp<Analyst[]>("/price-target-consensus", { symbol: sym }).catch(() => []),
   ])
 
-  const p = profiles?.[0] ?? {}
-  const q = quotes?.[0]   ?? {}
+  const p  = profiles?.[0]  ?? {} as Partial<Profile>
+  const m  = keyMetrics?.[0] ?? {} as Partial<Metrics>
+  const co = company?.[0]   ?? {} as Partial<Company>
+  const tgt = consensus?.[0] ?? {} as Partial<Analyst>
 
-  const price      = Number((q.price as number) ?? (p.price as number) ?? 0) || 0
-  const prevClose  = Number((q.previousClose as number) ?? price) || price
-  const changePct  = prevClose ? +((price - prevClose) / prevClose * 100).toFixed(2) : 0
+  const price     = Number(p.price ?? 0)
+  const changePct = Number(p.changePercentage ?? 0)
+
+  // Analyst rating
+  let analystRating = ""
+  if (analystRaw?.length) {
+    const r = analystRaw[0]
+    const sb = r.analystRatingsStrongBuy || 0
+    const b  = r.analystRatingsBuy || 0
+    const h  = r.analystRatingsHold || 0
+    const s  = r.analystRatingsSell || 0
+    const ss = r.analystRatingsStrongSell || 0
+    const total = sb + b + h + s + ss
+    const score = total ? (sb*5 + b*4 + h*3 + s*2 + ss*1) / total : 3
+    analystRating = score >= 4.2 ? "strong_buy" : score >= 3.5 ? "buy" : score >= 2.5 ? "hold" : "sell"
+  }
 
   return {
-    ticker:          sym,
-    company_name:    (p.companyName  as string) ?? sym,
-    exchange:        (p.exchangeShortName as string) ?? "",
-    sector:          (p.sector       as string) ?? "",
-    industry:        (p.industry     as string) ?? "",
-    website:         (p.website      as string) ?? "",
-    description:     ((p.description as string) ?? "").slice(0, 500),
-    employees:       (p.fullTimeEmployees as number) ?? null,
+    ticker:           sym,
+    company_name:     (p as { name?: string }).name ?? sym,
+    exchange:         p.exchange ?? "",
+    sector:           co.sector ?? "",
+    industry:         co.industry ?? "",
+    website:          co.website ?? "",
+    description:      (co.description ?? "").slice(0, 600),
+    employees:        co.fullTimeEmployees ? Number(co.fullTimeEmployees) : null,
     price,
-    prev_close:      prevClose,
-    change_pct:      changePct,
-    market_cap:      (p.mktCap       as number) ?? null,
-    pe_ratio:        (p.pe           as number) ?? null,
-    forward_pe:      null,
-    pb_ratio:        (p.priceToBook  as number) ?? null,
-    ps_ratio:        null,
-    peg_ratio:       null,
-    ev_ebitda:       null,
-    roe:             null,
-    roa:             null,
-    gross_margin:    null,
-    operating_margin: null,
-    net_margin:      null,
-    debt_to_equity:  null,
-    current_ratio:   null,
-    revenue_growth:  null,
-    earnings_growth: null,
-    free_cashflow:   null,
-    dividend_yield:  (p.lastDiv as number) ? (p.lastDiv as number) / price : null,
-    beta:            (p.beta         as number) ?? null,
-    "52w_high":      (p.range as string)?.split("-")[1] ? +((p.range as string).split("-")[1]) : null,
-    "52w_low":       (p.range as string)?.split("-")[0] ? +((p.range as string).split("-")[0]) : null,
-    avg_volume:      (q.avgVolume    as number) ?? null,
-    analyst_rating:  (q.earningsAnnouncement as string) ? "" : "",
-    target_price:    (q.priceAvg200  as number) ?? null,
-    eps:             (p.eps          as number) ?? null,
-    forward_eps:     null,
+    prev_close:       price - Number(p.change ?? 0),
+    change_pct:       changePct,
+    market_cap:       n(p.marketCap),
+    pe_ratio:         n(m.peRatio),
+    forward_pe:       n(m.forwardPE),
+    pb_ratio:         n(m.pbRatio),
+    ps_ratio:         n(m.priceToSalesRatio),
+    peg_ratio:        n(m.pegRatio),
+    ev_ebitda:        n(m.evToEbitda),
+    roe:              n(m.roe),
+    roa:              n(m.roa),
+    gross_margin:     n(m.grossProfitMargin),
+    operating_margin: n(m.operatingProfitMargin),
+    net_margin:       n(m.netProfitMargin),
+    debt_to_equity:   n(m.debtToEquity),
+    current_ratio:    n(m.currentRatio),
+    revenue_growth:   n(m.revenueGrowth),
+    earnings_growth:  n(m.earningsGrowth),
+    free_cashflow:    null,
+    dividend_yield:   n(m.dividendYield),
+    beta:             n(p.beta),
+    "52w_high":       n(p.yearHigh),
+    "52w_low":        n(p.yearLow),
+    avg_volume:       n(p.averageVolume),
+    analyst_rating:   analystRating,
+    target_price:     n(tgt.targetConsensus) ?? n(tgt.targetMedian),
+    eps:              n(m.eps),
+    forward_eps:      null,
   }
 }
 
 // ─── Price History ─────────────────────────────────────────────────────────
 const PERIOD_DAYS: Record<string, number> = {
-  "1d": 1, "5d": 5, "1mo": 30, "3mo": 90,
+  "1d": 2, "5d": 5, "1mo": 30, "3mo": 90,
   "6mo": 180, "1y": 365, "2y": 730, "5y": 1825,
 }
 
@@ -101,24 +132,18 @@ export async function fetchHistory(ticker: string, period = "1y"): Promise<OHLCV
   const from = new Date(to.getTime() - days * 86_400_000)
   const fmt  = (d: Date) => d.toISOString().slice(0, 10)
 
-  type FmpBar = {
-    date: string; open: number; high: number
-    low: number; close: number; volume: number
-  }
-  type FmpResp = { historical?: FmpBar[] }
+  type Bar = { date: string; open: number; high: number; low: number; close: number; volume: number }
+  const data = await fmp<Bar[]>("/historical-price-full", {
+    symbol: sym, from: fmt(from), to: fmt(to),
+  })
 
-  const data = await fmp<FmpResp>(
-    `/historical-price-full/${sym}`,
-    { from: fmt(from), to: fmt(to), serietype: "line" },
-  )
-
-  return (data.historical ?? [])
-    .map((b) => ({
+  return (Array.isArray(data) ? data : [])
+    .map(b => ({
       time:   b.date,
-      open:   +b.open.toFixed(2),
-      high:   +b.high.toFixed(2),
-      low:    +b.low.toFixed(2),
-      close:  +b.close.toFixed(2),
+      open:   +Number(b.open).toFixed(2),
+      high:   +Number(b.high).toFixed(2),
+      low:    +Number(b.low).toFixed(2),
+      close:  +Number(b.close).toFixed(2),
       volume: b.volume,
     }))
     .reverse()
@@ -128,122 +153,54 @@ export async function fetchHistory(ticker: string, period = "1y"): Promise<OHLCV
 export async function fetchFinancials(ticker: string): Promise<{ annual: FinancialYear[] }> {
   const sym = ticker.toUpperCase()
 
-  type IncRow = { calendarYear: string; revenue: number; grossProfit: number;
-    operatingIncome: number; netIncome: number; eps: number }
-  type BalRow = { calendarYear: string; totalAssets: number; totalLiabilities: number;
-    totalStockholdersEquity: number; totalCurrentAssets: number;
-    totalCurrentLiabilities: number; totalDebt: number }
-  type CfRow  = { calendarYear: string; freeCashFlow: number;
-    operatingCashFlow: number; capitalExpenditure: number }
+  type Inc = { calendarYear: string; revenue: number; grossProfit: number; operatingIncome: number; netIncome: number; eps: number }
+  type Bal = { calendarYear: string; totalAssets: number; totalLiabilities: number; totalStockholdersEquity: number; totalCurrentAssets: number; totalCurrentLiabilities: number; totalDebt: number }
+  type Cf  = { calendarYear: string; freeCashFlow: number; operatingCashFlow: number; capitalExpenditure: number }
 
   const [inc, bal, cf] = await Promise.all([
-    fmp<IncRow[]>(`/income-statement/${sym}`,  { limit: "5" }),
-    fmp<BalRow[]>(`/balance-sheet-statement/${sym}`, { limit: "5" }),
-    fmp<CfRow[]>(`/cash-flow-statement/${sym}`, { limit: "5" }),
+    fmp<Inc[]>("/income-statement", { symbol: sym, limit: "5" }),
+    fmp<Bal[]>("/balance-sheet-statement", { symbol: sym, limit: "5" }),
+    fmp<Cf[]>("/cash-flow-statement", { symbol: sym, limit: "5" }),
   ])
 
   const byYear: Record<string, FinancialYear> = {}
 
   for (const r of inc ?? []) {
-    const y = r.calendarYear
-    const rev = r.revenue || 0
-    const ni  = r.netIncome || 0
-    const gp  = r.grossProfit || 0
-    byYear[y] = {
-      ...(byYear[y] ?? {}),
-      year:             y,
-      revenue:          rev,
-      gross_profit:     gp,
-      operating_income: r.operatingIncome,
-      net_income:       ni,
-      eps:              r.eps,
-      gross_margin:     rev ? +(gp / rev).toFixed(4) : null,
-      net_margin:       rev ? +(ni / rev).toFixed(4) : null,
-    } as FinancialYear
+    const y = r.calendarYear; const rev = n(r.revenue) ?? 0; const ni = n(r.netIncome) ?? 0; const gp = n(r.grossProfit) ?? 0
+    byYear[y] = { ...(byYear[y] ?? {}), year: y, revenue: rev, gross_profit: gp, operating_income: n(r.operatingIncome), net_income: ni, eps: n(r.eps), gross_margin: rev ? +(gp/rev).toFixed(4) : null, net_margin: rev ? +(ni/rev).toFixed(4) : null } as FinancialYear
   }
-
   for (const r of bal ?? []) {
-    const y = r.calendarYear
-    const a = r.totalAssets || 0
-    const e = r.totalStockholdersEquity || 0
-    const ni = byYear[y]?.net_income ?? 0
-    byYear[y] = {
-      ...byYear[y],
-      year:                y,
-      total_assets:        a,
-      total_liabilities:   r.totalLiabilities,
-      shareholders_equity: e,
-      current_assets:      r.totalCurrentAssets,
-      current_liabilities: r.totalCurrentLiabilities,
-      total_debt:          r.totalDebt,
-      roe:  e > 0 ? +(ni / e).toFixed(4) : null,
-      roa:  a > 0 ? +(ni / a).toFixed(4) : null,
-      debt_ratio: a ? +(r.totalLiabilities / a).toFixed(4) : null,
-      current_ratio: r.totalCurrentLiabilities
-        ? +(r.totalCurrentAssets / r.totalCurrentLiabilities).toFixed(2)
-        : null,
-    } as FinancialYear
+    const y = r.calendarYear; const a = n(r.totalAssets) ?? 0; const e = n(r.totalStockholdersEquity) ?? 0; const ni = (byYear[y]?.net_income ?? 0) as number
+    byYear[y] = { ...(byYear[y] ?? {}), year: y, total_assets: a, total_liabilities: n(r.totalLiabilities), shareholders_equity: e, current_assets: n(r.totalCurrentAssets), current_liabilities: n(r.totalCurrentLiabilities), total_debt: n(r.totalDebt), roe: e>0?+(ni/e).toFixed(4):null, roa: a>0?+(ni/a).toFixed(4):null, debt_ratio: a?+((n(r.totalLiabilities)??0)/a).toFixed(4):null, current_ratio: n(r.totalCurrentLiabilities)?+((n(r.totalCurrentAssets)??0)/(n(r.totalCurrentLiabilities)??1)).toFixed(2):null } as FinancialYear
   }
-
   for (const r of cf ?? []) {
     const y = r.calendarYear
-    byYear[y] = {
-      ...byYear[y],
-      year:             y,
-      free_cash_flow:   r.freeCashFlow,
-      operating_cash_flow: r.operatingCashFlow,
-      capex:            r.capitalExpenditure,
-    } as FinancialYear
+    byYear[y] = { ...(byYear[y] ?? {}), year: y, free_cash_flow: n(r.freeCashFlow), operating_cash_flow: n(r.operatingCashFlow), capex: n(r.capitalExpenditure) } as FinancialYear
   }
 
-  const annual = Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year))
-  return { annual }
+  return { annual: Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year)) }
 }
 
 // ─── Peers ─────────────────────────────────────────────────────────────────
 export async function fetchPeers(ticker: string): Promise<PeerStock[]> {
   const sym = ticker.toUpperCase()
+  type PeerRow = { symbol: string; companyName: string; price: number; mktCap: number }
+  const list = await fmp<PeerRow[]>("/stock-peers", { symbol: sym }).catch(() => [])
+  if (!list?.length) return []
 
-  type PeerResp = { peersList?: string[] }[]
-  const peerData = await fmp4<PeerResp>("/stock_peers", { symbol: sym }).catch(() => [])
-  const peerList: string[] = peerData?.[0]?.peersList?.slice(0, 8) ?? []
-
-  if (peerList.length === 0) return []
-
-  type QuoteRow = {
-    symbol: string; name: string; pe: number; priceToBook: number
-    eps: number; marketCap: number
-  }
-  const quotes = await fmp<QuoteRow[]>(`/quote/${peerList.join(",")}`)
-
-  return (quotes ?? []).map((q) => ({
-    ticker:         q.symbol,
-    company_name:   q.name,
-    pe_ratio:       q.pe     ?? null,
-    forward_pe:     null,
-    pb_ratio:       q.priceToBook ?? null,
-    ps_ratio:       null,
-    peg_ratio:      null,
-    ev_ebitda:      null,
-    net_margin:     null,
-    roe:            null,
-    revenue_growth: null,
-    market_cap:     q.marketCap ?? null,
+  return list.slice(0, 8).map(p => ({
+    ticker: p.symbol, company_name: p.companyName,
+    pe_ratio: null, forward_pe: null, pb_ratio: null, ps_ratio: null,
+    peg_ratio: null, ev_ebitda: null, net_margin: null, roe: null,
+    revenue_growth: null, market_cap: n(p.mktCap),
   }))
 }
 
-// ─── Finnhub fallback quote ────────────────────────────────────────────────
+// ─── Fallback quote ────────────────────────────────────────────────────────
 export async function fetchFinnhubQuote(ticker: string) {
-  if (!FINN) return null
   try {
-    const res = await fetch(
-      `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINN}`,
-      { next: { revalidate: 60 } },
-    )
-    if (!res.ok) return null
-    const d = await res.json()
-    return { price: d.c, change_pct: d.dp, high: d.h, low: d.l, volume: d.v }
-  } catch {
-    return null
-  }
+    const data = await fmp<{ price: number; changePercentage: number }[]>("/profile", { symbol: ticker })
+    const d = data?.[0]
+    return d ? { price: d.price, change_pct: d.changePercentage } : null
+  } catch { return null }
 }
