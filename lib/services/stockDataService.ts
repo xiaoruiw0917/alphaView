@@ -11,13 +11,19 @@ const BASE  = "https://financialmodelingprep.com/api/v3"
 const BASE4 = "https://financialmodelingprep.com/api/v4"
 
 async function fmp<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+  if (!FMP) throw new Error("FMP_API_KEY not set")
   const qs = new URLSearchParams({ ...params, apikey: FMP }).toString()
   const res = await fetch(`${BASE}${path}?${qs}`, { next: { revalidate: 300 } })
   if (!res.ok) throw new Error(`FMP ${path} → HTTP ${res.status}`)
-  return res.json() as Promise<T>
+  const data = await res.json()
+  // FMP returns {"Error Message": "..."} on bad key
+  if (data && typeof data === "object" && !Array.isArray(data) && data["Error Message"])
+    throw new Error(data["Error Message"])
+  return data as T
 }
 
 async function fmp4<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+  if (!FMP) throw new Error("FMP_API_KEY not set")
   const qs = new URLSearchParams({ ...params, apikey: FMP }).toString()
   const res = await fetch(`${BASE4}${path}?${qs}`, { next: { revalidate: 300 } })
   if (!res.ok) throw new Error(`FMP4 ${path} → HTTP ${res.status}`)
@@ -37,8 +43,8 @@ export async function fetchOverview(ticker: string): Promise<StockOverview> {
   const p = profiles?.[0] ?? {}
   const q = quotes?.[0]   ?? {}
 
-  const price      = (q.price      as number) ?? (p.price as number) ?? 0
-  const prevClose  = (q.previousClose as number) ?? price
+  const price      = Number((q.price as number) ?? (p.price as number) ?? 0) || 0
+  const prevClose  = Number((q.previousClose as number) ?? price) || price
   const changePct  = prevClose ? +((price - prevClose) / prevClose * 100).toFixed(2) : 0
 
   return {

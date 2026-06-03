@@ -15,7 +15,7 @@ function fmtMktCap(v: number | null) {
 }
 
 export function StockHeader({ data }: { data: StockOverview }) {
-  const isUp = data.change_pct >= 0
+  const isUp = (data.change_pct ?? 0) >= 0
   const analystBadge = data.analyst_rating?.replace("_", " ").toUpperCase()
 
   return (
@@ -42,10 +42,10 @@ export function StockHeader({ data }: { data: StockOverview }) {
         {/* Right: price */}
         <div className="text-right">
           <div className="text-3xl font-bold tabular-nums">
-            {data.price !== null ? `$${data.price.toFixed(2)}` : "—"}
+            {data.price != null ? `$${Number(data.price).toFixed(2)}` : "—"}
           </div>
           <div className={`text-base font-semibold ${isUp ? "text-emerald-400" : "text-red-400"}`}>
-            {isUp ? "▲" : "▼"} {Math.abs(data.change_pct).toFixed(2)}%
+            {isUp ? "▲" : "▼"} {Math.abs(data.change_pct ?? 0).toFixed(2)}%
           </div>
           <div className="text-sm text-[var(--text-muted)] mt-1">
             市值：{fmtMktCap(data.market_cap)}
