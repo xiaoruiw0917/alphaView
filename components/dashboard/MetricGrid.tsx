@@ -2,17 +2,17 @@ import type { StockOverview } from "@/lib/types/stock"
 import { MetricCard } from "@/components/ui/MetricCard"
 
 function pct(v: number | null, dec = 1) {
-  if (v === null) return null
+  if (v == null) return null
   return `${(v * 100).toFixed(dec)}%`
 }
 function money(v: number | null) {
-  if (v === null) return null
+  if (v == null) return null
   if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(1)}B`
   if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(0)}M`
   return `$${v.toLocaleString()}`
 }
 function num(v: number | null, dec = 2, suffix = "") {
-  if (v === null) return null
+  if (v == null) return null
   return `${v.toFixed(dec)}${suffix}`
 }
 

@@ -3,7 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import type { FinancialYear } from "@/lib/types/stock"
 
 function fmtB(v: number | null) {
-  if (v === null) return "N/A"
+  if (v == null) return "N/A"
   const b = v / 1e9
   return `$${b.toFixed(1)}B`
 }
